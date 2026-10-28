@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Harness</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Login Screen -->
+  <div id="login-screen" class="screen active">
+    <div class="login-card">
+      <h1>Agent Harness</h1>
+      <p class="subtitle">Sign in with a one-time code</p>
+
+      <div id="email-step">
+        <input type="email" id="email-input" placeholder="you@example.com" autocomplete="email">
+        <button id="send-code-btn" onclick="handleSendCode()">Send Code</button>
+      </div>
+
+      <div id="otp-step" class="hidden">
+        <p class="otp-hint">Enter the 6-digit code sent to <span id="otp-email"></span></p>
+        <input type="text" id="otp-input" placeholder="000000" maxlength="6" inputmode="numeric" pattern="\d{6}">
+        <button id="verify-btn" onclick="handleVerify()">Verify</button>
+        <button class="link-btn" onclick="handleBackToEmail()">Use a different email</button>
+      </div>
+
+      <div id="login-error" class="error hidden"></div>
+      <div id="login-loading" class="loading hidden">
+        <span class="dot-pulse"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Screen -->
+  <div id="chat-screen" class="screen">
+    <header class="chat-header">
+      <div class="header-left">
+        <h2>Agent Harness</h2>
+        <span id="user-email" class="user-badge"></span>
+      </div>
+      <button class="logout-btn" onclick="handleLogout()">Log out</button>
+    </header>
+
+    <div id="message-list" class="message-list"></div>
+
+    <!-- Confirm Overlay -->
+    <div id="confirm-overlay" class="confirm-overlay hidden">
+      <div class="confirm-card">
+        <h3>Tool requires approval</h3>
+        <div id="confirm-tool-name" class="confirm-tool-name"></div>
+        <pre id="confirm-tool-args" class="confirm-args"></pre>
+        <div class="confirm-actions">
+          <button class="btn-approve" onclick="handleApprove()">Approve</button>
+          <button class="btn-deny" onclick="handleDeny()">Deny</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <textarea id="chat-input" placeholder="Send a message..." rows="1" onkeydown="handleInputKeydown(event)"></textarea>
+      <button id="send-btn" onclick="handleSend()">Send</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
