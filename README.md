@@ -7,6 +7,7 @@ Vanilla HTML/JS test UI for the [Agent Harness](../Basic_Harness) API. No build 
 - OTP login (email + 6-digit code)
 - SSE streaming chat with real-time tool call display
 - Gated tool confirmation (approve/deny writes)
+- Live log panel — collapsible right sidebar streaming structured backend logs via SSE, with level filtering, auto-scroll, expandable detail rows, and unread badge
 
 ## Setup
 

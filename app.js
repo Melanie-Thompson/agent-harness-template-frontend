@@ -8,6 +8,10 @@ const state = {
   isStreaming: false,
   abortController: null,
   pendingActions: [],
+  logPanelOpen: false,
+  logEventSource: null,
+  logLevelFilter: 'INFO',
+  logUnreadCount: 0,
 };
 
 // --- DOM refs (cached after DOMContentLoaded) ---
@@ -34,6 +38,11 @@ function cacheDOM() {
     confirmOverlay: document.getElementById('confirm-overlay'),
     confirmToolName: document.getElementById('confirm-tool-name'),
     confirmToolArgs: document.getElementById('confirm-tool-args'),
+    logPanel: document.getElementById('log-panel'),
+    logEntries: document.getElementById('log-entries'),
+    logLevelFilter: document.getElementById('log-level-filter'),
+    logToggle: document.getElementById('log-panel-toggle'),
+    logBadge: document.getElementById('log-badge'),
   };
 }
 
@@ -521,6 +530,117 @@ function initTextareaResize() {
     dom.chatInput.style.height = 'auto';
     dom.chatInput.style.height = Math.min(dom.chatInput.scrollHeight, 120) + 'px';
   });
+}
+
+// --- Log panel ---
+
+const LEVEL_BADGE = {
+  DEBUG: 'log-badge-debug',
+  INFO:  'log-badge-info',
+  WARNING: 'log-badge-warn',
+  ERROR: 'log-badge-error',
+};
+
+function toggleLogPanel() {
+  state.logPanelOpen = !state.logPanelOpen;
+  dom.logPanel.classList.toggle('collapsed', !state.logPanelOpen);
+  dom.logToggle.classList.toggle('active', state.logPanelOpen);
+
+  if (state.logPanelOpen) {
+    state.logUnreadCount = 0;
+    dom.logBadge.classList.add('hidden');
+    connectLogStream();
+  } else {
+    disconnectLogStream();
+  }
+}
+
+function connectLogStream() {
+  disconnectLogStream();
+  const level = state.logLevelFilter || '';
+  const url = `${API_BASE}/logs/stream${level ? '?level=' + level : ''}`;
+  const es = new EventSource(url, { withCredentials: true });
+
+  es.addEventListener('log', (e) => {
+    try {
+      const entry = JSON.parse(e.data);
+      appendLogEntry(entry);
+    } catch (_) {}
+  });
+
+  es.onerror = () => {
+    // silent reconnect — EventSource handles it automatically
+  };
+
+  state.logEventSource = es;
+}
+
+function disconnectLogStream() {
+  if (state.logEventSource) {
+    state.logEventSource.close();
+    state.logEventSource = null;
+  }
+}
+
+function appendLogEntry(entry) {
+  const willScroll = logShouldAutoScroll();
+
+  const row = document.createElement('div');
+  row.className = 'log-entry';
+  row.onclick = () => row.classList.toggle('expanded');
+
+  const ts = (entry.timestamp || '').split('T')[1] || entry.timestamp || '';
+  const timeStr = ts.replace(/\+.*$/, '').slice(0, 12);
+  const level = (entry.level || 'INFO').toUpperCase();
+  const badgeClass = LEVEL_BADGE[level] || 'log-badge-debug';
+  const event = entry.event || '';
+
+  const details = {};
+  for (const [k, v] of Object.entries(entry)) {
+    if (!['timestamp', 'level', 'logger', 'event', 'log_level'].includes(k) && v !== undefined && v !== null) {
+      details[k] = v;
+    }
+  }
+
+  const hasDetails = Object.keys(details).length > 0;
+
+  row.innerHTML = `
+    <span class="log-time">${esc(timeStr)}</span>
+    <span class="log-level-badge ${badgeClass}">${esc(level)}</span>
+    <span class="log-event">${esc(event)}${hasDetails ? ' ...' : ''}</span>
+    ${hasDetails ? `<div class="log-details">${esc(JSON.stringify(details, null, 2))}</div>` : ''}
+  `;
+
+  dom.logEntries.appendChild(row);
+
+  // Keep max 500 entries in DOM
+  while (dom.logEntries.children.length > 500) {
+    dom.logEntries.removeChild(dom.logEntries.firstChild);
+  }
+
+  if (!state.logPanelOpen) {
+    state.logUnreadCount++;
+    dom.logBadge.textContent = state.logUnreadCount > 99 ? '99+' : state.logUnreadCount;
+    dom.logBadge.classList.remove('hidden');
+  }
+
+  if (willScroll) dom.logEntries.scrollTop = dom.logEntries.scrollHeight;
+}
+
+function logShouldAutoScroll() {
+  const el = dom.logEntries;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+}
+
+function handleLogLevelChange() {
+  state.logLevelFilter = dom.logLevelFilter.value;
+  if (state.logPanelOpen) {
+    connectLogStream();
+  }
+}
+
+function clearLogPanel() {
+  dom.logEntries.innerHTML = '';
 }
 
 // --- Init ---

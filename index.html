@@ -40,27 +40,54 @@
         <h2>Agent Harness</h2>
         <span id="user-email" class="user-badge"></span>
       </div>
-      <button class="logout-btn" onclick="handleLogout()">Log out</button>
+      <div class="header-right">
+        <button id="log-panel-toggle" class="log-toggle-btn" onclick="toggleLogPanel()">
+          Logs <span id="log-badge" class="log-badge hidden">0</span>
+        </button>
+        <button class="logout-btn" onclick="handleLogout()">Log out</button>
+      </div>
     </header>
 
-    <div id="message-list" class="message-list"></div>
+    <div class="chat-body">
+      <div class="chat-main">
+        <div id="message-list" class="message-list"></div>
 
-    <!-- Confirm Overlay -->
-    <div id="confirm-overlay" class="confirm-overlay hidden">
-      <div class="confirm-card">
-        <h3>Tool requires approval</h3>
-        <div id="confirm-tool-name" class="confirm-tool-name"></div>
-        <pre id="confirm-tool-args" class="confirm-args"></pre>
-        <div class="confirm-actions">
-          <button class="btn-approve" onclick="handleApprove()">Approve</button>
-          <button class="btn-deny" onclick="handleDeny()">Deny</button>
+        <!-- Confirm Overlay -->
+        <div id="confirm-overlay" class="confirm-overlay hidden">
+          <div class="confirm-card">
+            <h3>Tool requires approval</h3>
+            <div id="confirm-tool-name" class="confirm-tool-name"></div>
+            <pre id="confirm-tool-args" class="confirm-args"></pre>
+            <div class="confirm-actions">
+              <button class="btn-approve" onclick="handleApprove()">Approve</button>
+              <button class="btn-deny" onclick="handleDeny()">Deny</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-input-area">
+          <textarea id="chat-input" placeholder="Send a message..." rows="1" onkeydown="handleInputKeydown(event)"></textarea>
+          <button id="send-btn" onclick="handleSend()">Send</button>
         </div>
       </div>
-    </div>
 
-    <div class="chat-input-area">
-      <textarea id="chat-input" placeholder="Send a message..." rows="1" onkeydown="handleInputKeydown(event)"></textarea>
-      <button id="send-btn" onclick="handleSend()">Send</button>
+      <!-- Log Panel -->
+      <aside id="log-panel" class="log-panel collapsed">
+        <div class="log-panel-header">
+          <h3>Live Logs</h3>
+          <div class="log-controls">
+            <select id="log-level-filter" onchange="handleLogLevelChange()">
+              <option value="">All</option>
+              <option value="DEBUG">DEBUG</option>
+              <option value="INFO" selected>INFO</option>
+              <option value="WARNING">WARNING</option>
+              <option value="ERROR">ERROR</option>
+            </select>
+            <button class="log-clear-btn" onclick="clearLogPanel()">Clear</button>
+          </div>
+        </div>
+        <div id="log-entries" class="log-entries"></div>
+      </aside>
     </div>
   </div>
 
