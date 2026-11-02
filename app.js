@@ -8,10 +8,9 @@ const state = {
   isStreaming: false,
   abortController: null,
   pendingActions: [],
-  logPanelOpen: false,
   logEventSource: null,
   logLevelFilter: 'INFO',
-  logUnreadCount: 0,
+  conversationId: null,
 };
 
 // --- DOM refs (cached after DOMContentLoaded) ---
@@ -41,8 +40,12 @@ function cacheDOM() {
     logPanel: document.getElementById('log-panel'),
     logEntries: document.getElementById('log-entries'),
     logLevelFilter: document.getElementById('log-level-filter'),
-    logToggle: document.getElementById('log-panel-toggle'),
-    logBadge: document.getElementById('log-badge'),
+    devOtpBanner: document.getElementById('dev-otp-banner'),
+    devOtpCode: document.getElementById('dev-otp-code'),
+    redisEntries: document.getElementById('redis-entries'),
+    tdaView: document.getElementById('tda-view'),
+    tdaClusters: document.getElementById('tda-clusters'),
+    tdaBettiBar: document.getElementById('tda-betti-bar'),
   };
 }
 
@@ -100,10 +103,12 @@ function setLoginLoading(loading) {
 
 async function handleSendCode() {
   const email = dom.emailInput.value.trim();
-  if (!email) return;
+  if (!email || dom.sendCodeBtn.disabled) return;
 
   hideLoginError();
   setLoginLoading(true);
+  dom.devOtpBanner.classList.add('hidden');
+  dom.devOtpCode.value = '';
 
   try {
     await apiPost('/auth/otp/send', { email });
@@ -113,9 +118,9 @@ async function handleSendCode() {
     dom.otpStep.classList.remove('hidden');
     dom.otpInput.value = '';
     dom.otpInput.focus();
+    setLoginLoading(false);
   } catch (e) {
     showLoginError(e.message);
-  } finally {
     setLoginLoading(false);
   }
 }
@@ -145,16 +150,19 @@ function handleBackToEmail() {
   dom.emailInput.focus();
 }
 
-async function handleLogout() {
+async function clearSession() {
   try {
-    await apiPost('/sessions/logout', {});
-  } catch (_) {
-    // ignore — clear local state regardless
-  }
+    await fetch(`${API_BASE}/sessions/logout`, { method: 'POST', credentials: 'include' });
+  } catch (_) {}
   state.userId = null;
   state.email = '';
   state.messages = [];
   state.pendingActions = [];
+  state.conversationId = null;
+}
+
+async function handleLogout() {
+  await clearSession();
   dom.messageList.innerHTML = '';
   dom.otpStep.classList.add('hidden');
   dom.emailStep.classList.remove('hidden');
@@ -261,7 +269,8 @@ function renderBlocked(el, content, extra) {
   el.innerHTML = `
     <div class="tool-label">Blocked — ${esc(extra.stage)}</div>
     ${extra.tool ? `<div class="tool-name">${esc(extra.tool)}</div>` : ''}
-    <pre>${esc(content)}</pre>
+    <div class="blocked-summary">${esc(content)}</div>
+    ${extra.category ? `<div class="blocked-category">${esc(extra.category)}</div>` : ''}
   `;
 }
 
@@ -320,6 +329,7 @@ function parseSSEEvent(text) {
 }
 
 async function streamChat(prompt) {
+  _streamingEl = null;
   state.isStreaming = true;
   setStreamingUI(true);
 
@@ -332,7 +342,7 @@ async function streamChat(prompt) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, conversation_id: state.conversationId }),
       signal: abortController.signal,
     });
   } catch (e) {
@@ -389,16 +399,27 @@ async function streamChat(prompt) {
 
 // --- SSE event dispatch ---
 
+let _streamingEl = null;
+
 const EVENT_HANDLERS = {
+  conversation_started: (d) => { state.conversationId = d.conversation_id; },
   thinking:       (d) => showThinking(d.iteration),
-  tool_call:      (d) => { hideThinking(); appendMessage('tool_call', d.tool, { args: d.args }); },
-  tool_pending:   (d) => { hideThinking(); handleToolPending(d); },
+  token:          (d) => {
+    hideThinking();
+    if (!_streamingEl) {
+      _streamingEl = appendMessage('assistant', '');
+    }
+    _streamingEl.textContent += d.token;
+    if (shouldAutoScroll()) scrollToBottom();
+  },
+  tool_call:      (d) => { hideThinking(); _streamingEl = null; appendMessage('tool_call', d.tool, { args: d.args }); },
+  tool_pending:   (d) => { hideThinking(); _streamingEl = null; handleToolPending(d); },
   tool_result:    (d) => appendMessage('tool_result', d.tool, { result: d.result }),
   tool_confirmed: (d) => handleToolConfirmed(d),
   tool_denied:    (d) => handleToolDenied(d),
-  response:       (d) => { hideThinking(); appendMessage('assistant', d.content); },
-  error:          (d) => { hideThinking(); appendMessage('tool_error', d.error, { tool: d.tool }); },
-  blocked:        (d) => { hideThinking(); appendMessage('blocked', d.reason, { stage: d.stage, tool: d.tool }); },
+  response:       (d) => { hideThinking(); _streamingEl = null; },
+  error:          (d) => { hideThinking(); _streamingEl = null; appendMessage('tool_error', d.error, { tool: d.tool }); },
+  blocked:        (d) => { hideThinking(); _streamingEl = null; appendMessage('blocked', d.reason, { stage: d.stage, tool: d.tool, category: d.category }); },
   eval_retry:     (d) => appendMessage('system', `Retrying ${d.tool}: ${d.reason}`),
 };
 
@@ -541,24 +562,17 @@ const LEVEL_BADGE = {
   ERROR: 'log-badge-error',
 };
 
-function toggleLogPanel() {
-  state.logPanelOpen = !state.logPanelOpen;
-  dom.logPanel.classList.toggle('collapsed', !state.logPanelOpen);
-  dom.logToggle.classList.toggle('active', state.logPanelOpen);
+const LEVEL_RANK = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3 };
 
-  if (state.logPanelOpen) {
-    state.logUnreadCount = 0;
-    dom.logBadge.classList.add('hidden');
-    connectLogStream();
-  } else {
-    disconnectLogStream();
-  }
+function levelPassesFilter(level) {
+  const filter = state.logLevelFilter;
+  if (!filter) return true;
+  return (LEVEL_RANK[level] ?? 0) >= (LEVEL_RANK[filter] ?? 0);
 }
 
 function connectLogStream() {
   disconnectLogStream();
-  const level = state.logLevelFilter || '';
-  const url = `${API_BASE}/logs/stream${level ? '?level=' + level : ''}`;
+  const url = `${API_BASE}/logs/stream?catchup=0`;
   const es = new EventSource(url, { withCredentials: true });
 
   es.addEventListener('log', (e) => {
@@ -587,7 +601,12 @@ function appendLogEntry(entry) {
 
   const row = document.createElement('div');
   row.className = 'log-entry';
-  row.onclick = () => row.classList.toggle('expanded');
+  row.dataset.level = (entry.level || 'INFO').toUpperCase();
+  if (!levelPassesFilter(row.dataset.level)) row.style.display = 'none';
+  row.onclick = (e) => {
+    if (e.target.closest('.log-details') && window.getSelection().toString()) return;
+    row.classList.toggle('expanded');
+  };
 
   const ts = (entry.timestamp || '').split('T')[1] || entry.timestamp || '';
   const timeStr = ts.replace(/\+.*$/, '').slice(0, 12);
@@ -603,25 +622,37 @@ function appendLogEntry(entry) {
   }
 
   const hasDetails = Object.keys(details).length > 0;
+  const INLINE_KEYS = ['code', 'email', 'tool', 'verdict', 'pending_id', 'duration_ms', 'error'];
+  const inlineParts = [];
+  for (const k of INLINE_KEYS) {
+    if (details[k] !== undefined && details[k] !== null) {
+      inlineParts.push(`${k}=${details[k]}`);
+    }
+  }
+  const inlineStr = inlineParts.length > 0 ? ' ' + inlineParts.join(' ') : '';
 
   row.innerHTML = `
     <span class="log-time">${esc(timeStr)}</span>
     <span class="log-level-badge ${badgeClass}">${esc(level)}</span>
-    <span class="log-event">${esc(event)}${hasDetails ? ' ...' : ''}</span>
+    <span class="log-event">${esc(event)}${esc(inlineStr)}${hasDetails ? ' ...' : ''}</span>
     ${hasDetails ? `<div class="log-details">${esc(JSON.stringify(details, null, 2))}</div>` : ''}
   `;
+
+  if (event === 'otp.dev_code' && entry.code) {
+    if (dom.devOtpBanner) {
+      dom.devOtpCode.value = entry.code;
+      dom.devOtpBanner.classList.remove('hidden');
+    }
+    if (dom.otpInput) {
+      dom.otpInput.value = entry.code;
+    }
+  }
 
   dom.logEntries.appendChild(row);
 
   // Keep max 500 entries in DOM
   while (dom.logEntries.children.length > 500) {
     dom.logEntries.removeChild(dom.logEntries.firstChild);
-  }
-
-  if (!state.logPanelOpen) {
-    state.logUnreadCount++;
-    dom.logBadge.textContent = state.logUnreadCount > 99 ? '99+' : state.logUnreadCount;
-    dom.logBadge.classList.remove('hidden');
   }
 
   if (willScroll) dom.logEntries.scrollTop = dom.logEntries.scrollHeight;
@@ -634,8 +665,8 @@ function logShouldAutoScroll() {
 
 function handleLogLevelChange() {
   state.logLevelFilter = dom.logLevelFilter.value;
-  if (state.logPanelOpen) {
-    connectLogStream();
+  for (const row of dom.logEntries.children) {
+    row.style.display = levelPassesFilter(row.dataset.level) ? '' : 'none';
   }
 }
 
@@ -643,19 +674,242 @@ function clearLogPanel() {
   dom.logEntries.innerHTML = '';
 }
 
+// --- TDA Panel ---
+
+const CLUSTER_COLORS = ['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f','#edc948','#b07aa1','#ff9da7'];
+let _tdaEventSource = null;
+let _logMode = 'flat';
+const _tdaExpanded = new Set();
+
+function setLogMode(mode) {
+  _logMode = mode;
+  document.querySelectorAll('.tda-toggle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  const logEntries = document.getElementById('log-entries');
+  const tdaView = document.getElementById('tda-view');
+  if (mode === 'tda') {
+    logEntries.style.display = 'none';
+    tdaView.style.display = '';
+    connectTDAStream();
+  } else {
+    logEntries.style.display = '';
+    tdaView.style.display = 'none';
+    disconnectTDAStream();
+  }
+}
+
+function connectTDAStream() {
+  disconnectTDAStream();
+  const url = `${API_BASE}/tda/stream?catchup=true`;
+  const es = new EventSource(url, { withCredentials: true });
+  es.addEventListener('topology', (e) => {
+    try {
+      const snapshot = JSON.parse(e.data);
+      renderTDAView(snapshot);
+    } catch (_) {}
+  });
+  es.addEventListener('error', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      document.getElementById('tda-clusters').innerHTML =
+        `<div class="tda-empty">${esc(data.error || 'TDA error')}</div>`;
+    } catch (_) {}
+  });
+  es.onerror = () => {};
+  _tdaEventSource = es;
+}
+
+function disconnectTDAStream() {
+  if (_tdaEventSource) {
+    _tdaEventSource.close();
+    _tdaEventSource = null;
+  }
+}
+
+function renderTDAView(snapshot) {
+  const bettiBar = document.getElementById('tda-betti-bar');
+  const b0 = snapshot.betti[0] || 0;
+  const b1 = snapshot.betti[1] || 0;
+  bettiBar.innerHTML =
+    `<span>β₀</span> ${b0} components` +
+    `<span>β₁</span> ${b1} loops`;
+
+  renderPersistenceDiagram(snapshot.h0_features, snapshot.h1_features);
+  renderClusters(snapshot.nodes, snapshot.edges);
+}
+
+function renderPersistenceDiagram(h0, h1) {
+  const svg = document.getElementById('tda-persistence-diagram');
+  const w = svg.clientWidth || 380;
+  const h = 120;
+  const pad = 16;
+
+  let maxVal = 0;
+  const allFeats = [...(h0 || []), ...(h1 || [])];
+  for (const f of allFeats) {
+    if (f.birth != null) maxVal = Math.max(maxVal, f.birth);
+    if (f.death != null) maxVal = Math.max(maxVal, f.death);
+  }
+  if (maxVal === 0) maxVal = 1;
+
+  const sx = (v) => pad + ((v || 0) / maxVal) * (w - 2 * pad);
+  const sy = (v) => pad + ((v || 0) / maxVal) * (h - 2 * pad);
+
+  let html = `<line x1="${pad}" y1="${pad}" x2="${w - pad}" y2="${h - pad}" stroke="#1a3a1a" stroke-width="1" stroke-dasharray="4"/>`;
+
+  for (const f of (h0 || [])) {
+    if (f.birth == null || f.death == null) continue;
+    html += `<circle cx="${sx(f.birth)}" cy="${sy(f.death)}" r="3" fill="#4e79a7" opacity="0.8"/>`;
+  }
+  for (const f of (h1 || [])) {
+    if (f.birth == null || f.death == null) continue;
+    html += `<circle cx="${sx(f.birth)}" cy="${sy(f.death)}" r="3" fill="#e15759" opacity="0.8"/>`;
+  }
+
+  html += `<text x="${w - pad}" y="${h - 4}" text-anchor="end" font-size="8" fill="#116611">birth →</text>`;
+  html += `<text x="2" y="${pad - 4}" font-size="8" fill="#116611">↓ death</text>`;
+
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.innerHTML = html;
+}
+
+function renderClusters(nodes, edges) {
+  const container = document.getElementById('tda-clusters');
+  if (!nodes || nodes.length === 0) {
+    container.innerHTML = '<div class="tda-empty">Waiting for log events...</div>';
+    return;
+  }
+
+  const sorted = [...nodes].sort((a, b) => b.persistence - a.persistence);
+
+  container.innerHTML = '';
+  for (const node of sorted) {
+    const color = CLUSTER_COLORS[node.cluster_id % CLUSTER_COLORS.length];
+    const groupId = `tda-cluster-${node.cluster_id}`;
+    const isExpanded = _tdaExpanded.has(groupId);
+
+    const group = document.createElement('div');
+    group.className = 'tda-cluster-group' + (isExpanded ? ' expanded' : '');
+
+    const events = node.event_indices.map(i => `event[${i}]`).join(', ');
+
+    group.innerHTML = `
+      <div class="tda-cluster-header">
+        <span class="tda-cluster-badge" style="background:${color}"></span>
+        <span class="tda-cluster-label">${esc(node.label)}</span>
+        <span class="tda-cluster-count">${node.size}</span>
+        <span class="tda-cluster-persistence">p=${node.persistence}</span>
+      </div>
+      <div class="tda-cluster-body">
+        ${node.event_indices.map(i =>
+          `<div class="tda-cluster-event">idx ${i}</div>`
+        ).join('')}
+      </div>
+    `;
+
+    group.querySelector('.tda-cluster-header').addEventListener('click', () => {
+      group.classList.toggle('expanded');
+      if (group.classList.contains('expanded')) {
+        _tdaExpanded.add(groupId);
+      } else {
+        _tdaExpanded.delete(groupId);
+      }
+    });
+
+    container.appendChild(group);
+  }
+}
+
+// --- Redis Panel ---
+
+let _redisInterval = null;
+const _redisExpanded = new Set();
+
+async function refreshRedisPanel() {
+  try {
+    const resp = await fetch(`${API_BASE}/redis/keys`, { credentials: 'include' });
+    if (!resp.ok) {
+      dom.redisEntries.innerHTML = '<div class="redis-empty">Failed to load</div>';
+      return;
+    }
+    const entries = await resp.json();
+    renderRedisEntries(entries);
+  } catch {
+    dom.redisEntries.innerHTML = '<div class="redis-empty">Connection error</div>';
+  }
+}
+
+function renderRedisEntries(entries) {
+  if (!entries.length) {
+    dom.redisEntries.innerHTML = '<div class="redis-empty">No keys</div>';
+    return;
+  }
+
+  entries.sort((a, b) => a.key.localeCompare(b.key));
+
+  const DB_CLASS = {
+    sessions: 'redis-db-sessions',
+    conversations: 'redis-db-conversations',
+  };
+
+  dom.redisEntries.innerHTML = '';
+  for (const entry of entries) {
+    const entryId = `${entry.db}:${entry.key}`;
+    const el = document.createElement('div');
+    el.className = 'redis-entry' + (_redisExpanded.has(entryId) ? ' expanded' : '');
+
+    const ttlText = entry.ttl != null ? `${entry.ttl}s` : '';
+    const dbClass = DB_CLASS[entry.db] || 'redis-db-sessions';
+    const valueStr = typeof entry.value === 'object'
+      ? JSON.stringify(entry.value, null, 2)
+      : String(entry.value);
+
+    el.innerHTML = `
+      <div class="redis-key-row">
+        <span class="redis-db-badge ${dbClass}">${esc(entry.db)}</span>
+        <span class="redis-type-badge">${esc(entry.type)}</span>
+        <span class="redis-key-name">${esc(entry.key)}</span>
+        ${ttlText ? `<span class="redis-ttl">${esc(ttlText)}</span>` : ''}
+      </div>
+      <pre class="redis-value">${esc(valueStr)}</pre>
+    `;
+
+    el.addEventListener('click', () => {
+      el.classList.toggle('expanded');
+      if (el.classList.contains('expanded')) {
+        _redisExpanded.add(entryId);
+      } else {
+        _redisExpanded.delete(entryId);
+      }
+    });
+    dom.redisEntries.appendChild(el);
+  }
+}
+
+function startRedisPolling() {
+  refreshRedisPanel();
+  if (_redisInterval) clearInterval(_redisInterval);
+  _redisInterval = setInterval(refreshRedisPanel, 3000);
+}
+
+function stopRedisPolling() {
+  if (_redisInterval) {
+    clearInterval(_redisInterval);
+    _redisInterval = null;
+  }
+}
+
 // --- Init ---
 
 document.addEventListener('DOMContentLoaded', async () => {
   cacheDOM();
   initTextareaResize();
+  dom.logEntries.innerHTML = '';
+  connectLogStream();
+  startRedisPolling();
 
-  try {
-    const me = await apiGet('/sessions/me');
-    state.userId = me.user_id;
-    state.email = me.user_id;
-    enterChat();
-  } catch {
-    showScreen('login');
-    dom.emailInput.focus();
-  }
+  await clearSession();
+  showScreen('login');
+  dom.emailInput.focus();
 });
