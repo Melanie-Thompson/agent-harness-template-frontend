@@ -178,17 +178,45 @@ function enterChat() {
 
 // --- Message rendering ---
 
+let _userScrolledAway = false;
+
 function shouldAutoScroll() {
+  if (_userScrolledAway) return false;
   const el = dom.messageList;
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 }
 
 function scrollToBottom() {
   dom.messageList.scrollTop = dom.messageList.scrollHeight;
 }
 
+function initScrollTracking() {
+  const jumpBtn = document.createElement('button');
+  jumpBtn.className = 'scroll-to-bottom-btn hidden';
+  jumpBtn.textContent = '↓ Latest';
+  jumpBtn.addEventListener('click', () => {
+    _userScrolledAway = false;
+    scrollToBottom();
+  });
+  dom.messageList.parentElement.appendChild(jumpBtn);
+
+  let lastScrollTop = 0;
+  dom.messageList.addEventListener('scroll', () => {
+    const el = dom.messageList;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (atBottom) {
+      _userScrolledAway = false;
+      jumpBtn.classList.add('hidden');
+    } else if (el.scrollTop < lastScrollTop) {
+      _userScrolledAway = true;
+      jumpBtn.classList.remove('hidden');
+    }
+    lastScrollTop = el.scrollTop;
+  }, { passive: true });
+}
+
 function appendMessage(role, content, extra) {
-  const willScroll = shouldAutoScroll();
+  const wasNearBottom = shouldAutoScroll();
 
   const el = document.createElement('div');
 
@@ -228,7 +256,7 @@ function appendMessage(role, content, extra) {
   dom.messageList.appendChild(el);
   state.messages.push({ role, content, extra });
 
-  if (willScroll) scrollToBottom();
+  if (wasNearBottom) requestAnimationFrame(scrollToBottom);
   return el;
 }
 
@@ -299,7 +327,7 @@ function showThinking(iteration) {
     <div class="thinking-dots"><span></span><span></span><span></span></div>
     Thinking${iteration > 1 ? ` (step ${iteration})` : ''}...
   `;
-  if (shouldAutoScroll()) scrollToBottom();
+  if (shouldAutoScroll()) requestAnimationFrame(scrollToBottom);
 }
 
 function hideThinking() {
@@ -393,7 +421,10 @@ async function streamChat(prompt) {
     hideThinking();
     state.isStreaming = false;
     state.abortController = null;
+    _userScrolledAway = false;
     setStreamingUI(false);
+    const jumpBtn = document.querySelector('.scroll-to-bottom-btn');
+    if (jumpBtn && shouldAutoScroll()) jumpBtn.classList.add('hidden');
   }
 }
 
@@ -408,9 +439,11 @@ const EVENT_HANDLERS = {
     hideThinking();
     if (!_streamingEl) {
       _streamingEl = appendMessage('assistant', '');
+      return;
     }
+    const wasNearBottom = shouldAutoScroll();
     _streamingEl.textContent += d.token;
-    if (shouldAutoScroll()) scrollToBottom();
+    if (wasNearBottom) requestAnimationFrame(scrollToBottom);
   },
   tool_call:      (d) => { hideThinking(); _streamingEl = null; appendMessage('tool_call', d.tool, { args: d.args }); },
   tool_pending:   (d) => { hideThinking(); _streamingEl = null; handleToolPending(d); },
@@ -539,6 +572,7 @@ function handleSend() {
   const text = dom.chatInput.value.trim();
   if (!text || state.isStreaming) return;
 
+  _userScrolledAway = false;
   dom.chatInput.value = '';
   dom.chatInput.style.height = 'auto';
   appendMessage('user', text);
@@ -905,6 +939,7 @@ function stopRedisPolling() {
 document.addEventListener('DOMContentLoaded', async () => {
   cacheDOM();
   initTextareaResize();
+  initScrollTracking();
   dom.logEntries.innerHTML = '';
   connectLogStream();
   startRedisPolling();
