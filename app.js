@@ -111,12 +111,12 @@ async function handleSendCode() {
   dom.devOtpCode.value = '';
 
   try {
-    await apiPost('/auth/otp/send', { email });
     state.email = email;
     dom.otpEmail.textContent = email;
+    dom.otpInput.value = '';
     dom.emailStep.classList.add('hidden');
     dom.otpStep.classList.remove('hidden');
-    dom.otpInput.value = '';
+    await apiPost('/auth/otp/send', { email });
     dom.otpInput.focus();
     setLoginLoading(false);
   } catch (e) {
@@ -811,7 +811,7 @@ function renderPersistenceDiagram(h0, h1) {
 function renderClusters(nodes, edges) {
   const container = document.getElementById('tda-clusters');
   if (!nodes || nodes.length === 0) {
-    container.innerHTML = '<div class="tda-empty">Waiting for log events...</div>';
+    container.innerHTML = '<div class="tda-empty">No conversation data yet — send a message to see topic clusters.</div>';
     return;
   }
 
@@ -822,22 +822,24 @@ function renderClusters(nodes, edges) {
     const color = CLUSTER_COLORS[node.cluster_id % CLUSTER_COLORS.length];
     const groupId = `tda-cluster-${node.cluster_id}`;
     const isExpanded = _tdaExpanded.has(groupId);
+    const messages = node.messages || [];
 
     const group = document.createElement('div');
     group.className = 'tda-cluster-group' + (isExpanded ? ' expanded' : '');
-
-    const events = node.event_indices.map(i => `event[${i}]`).join(', ');
 
     group.innerHTML = `
       <div class="tda-cluster-header">
         <span class="tda-cluster-badge" style="background:${color}"></span>
         <span class="tda-cluster-label">${esc(node.label)}</span>
-        <span class="tda-cluster-count">${node.size}</span>
+        <span class="tda-cluster-count">${node.size} msg${node.size !== 1 ? 's' : ''}</span>
         <span class="tda-cluster-persistence">p=${node.persistence}</span>
       </div>
       <div class="tda-cluster-body">
-        ${node.event_indices.map(i =>
-          `<div class="tda-cluster-event">idx ${i}</div>`
+        ${messages.map(m =>
+          `<div class="tda-cluster-msg tda-role-${esc(m.role)}">
+            <span class="tda-msg-role">${esc(m.role)}</span>
+            <span class="tda-msg-text">${esc(m.text)}</span>
+          </div>`
         ).join('')}
       </div>
     `;
