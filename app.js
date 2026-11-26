@@ -651,7 +651,7 @@ function appendLogEntry(entry) {
   const details = {};
   for (const [k, v] of Object.entries(entry)) {
     if (!['timestamp', 'level', 'logger', 'event', 'log_level'].includes(k) && v !== undefined && v !== null) {
-      details[k] = v;
+      details[k] = (k === 'code' && event === 'otp.dev_code') ? '******' : v;
     }
   }
 
