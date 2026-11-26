@@ -98,6 +98,7 @@
           <div class="tda-toggle" id="tda-toggle">
             <button class="tda-toggle-btn active" data-mode="flat" onclick="setLogMode('flat')">Flat</button>
             <button class="tda-toggle-btn" data-mode="tda" onclick="setLogMode('tda')">TDA</button>
+            <button class="tda-toggle-btn" data-mode="bench" onclick="setLogMode('bench')">Bench</button>
           </div>
           <select id="log-level-filter" onchange="handleLogLevelChange()">
             <option value="">ALL</option>
@@ -114,6 +115,14 @@
         <div id="tda-betti-bar" class="tda-betti-bar"></div>
         <svg id="tda-persistence-diagram" class="tda-persistence-diagram"></svg>
         <div id="tda-clusters" class="tda-clusters"></div>
+      </div>
+      <div id="bench-view" class="bench-view" style="display:none;">
+        <div class="bench-controls">
+          <button id="bench-run-btn" class="bench-run-btn" onclick="runBenchmark()">Run Benchmark</button>
+          <span id="bench-status" class="bench-status"></span>
+        </div>
+        <div id="bench-metrics" class="bench-metrics"></div>
+        <div id="bench-results" class="bench-results"></div>
       </div>
     </aside>
   </div>

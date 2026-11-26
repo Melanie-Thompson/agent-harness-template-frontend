@@ -722,14 +722,17 @@ function setLogMode(mode) {
   });
   const logEntries = document.getElementById('log-entries');
   const tdaView = document.getElementById('tda-view');
+  const benchView = document.getElementById('bench-view');
+  logEntries.style.display = mode === 'flat' ? '' : 'none';
+  tdaView.style.display = mode === 'tda' ? '' : 'none';
+  benchView.style.display = mode === 'bench' ? '' : 'none';
   if (mode === 'tda') {
-    logEntries.style.display = 'none';
-    tdaView.style.display = '';
     connectTDAStream();
   } else {
-    logEntries.style.display = '';
-    tdaView.style.display = 'none';
     disconnectTDAStream();
+  }
+  if (mode === 'bench') {
+    loadBenchmarkResults();
   }
 }
 
@@ -934,6 +937,120 @@ function stopRedisPolling() {
     clearInterval(_redisInterval);
     _redisInterval = null;
   }
+}
+
+// --- Benchmark ---
+
+async function runBenchmark() {
+  const btn = document.getElementById('bench-run-btn');
+  const status = document.getElementById('bench-status');
+  const metrics = document.getElementById('bench-metrics');
+  const results = document.getElementById('bench-results');
+
+  btn.disabled = true;
+  status.textContent = 'Running benchmark…';
+  metrics.innerHTML = '';
+  results.innerHTML = '';
+
+  try {
+    const resp = await fetch(`${API_BASE}/benchmark/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderBenchmarkResults(data);
+    status.textContent = '';
+  } catch (e) {
+    status.textContent = `Error: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadBenchmarkResults() {
+  const metrics = document.getElementById('bench-metrics');
+  const results = document.getElementById('bench-results');
+  const status = document.getElementById('bench-status');
+
+  try {
+    const resp = await fetch(`${API_BASE}/benchmark/results`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.error) {
+      metrics.innerHTML = `<div class="bench-empty">${data.error}</div>`;
+      return;
+    }
+    renderBenchmarkResults(data);
+  } catch (e) {
+    status.textContent = `Error loading results: ${e.message}`;
+  }
+}
+
+function renderBenchmarkResults(data) {
+  const metrics = document.getElementById('bench-metrics');
+  const results = document.getElementById('bench-results');
+
+  const pct = (v) => `${(v * 100).toFixed(1)}%`;
+  const passColor = data.pass_rate >= 0.8 ? 'var(--bench-pass)' : data.pass_rate >= 0.5 ? 'var(--bench-warn)' : 'var(--bench-fail)';
+
+  metrics.innerHTML = `
+    <div class="bench-metric-grid">
+      <div class="bench-metric">
+        <div class="bench-metric-value" style="color:${passColor}">${pct(data.pass_rate)}</div>
+        <div class="bench-metric-label">Pass Rate</div>
+        <div class="bench-metric-detail">${data.passed}/${data.total}</div>
+      </div>
+      <div class="bench-metric">
+        <div class="bench-metric-value">${pct(data.false_block_rate)}</div>
+        <div class="bench-metric-label">False Block</div>
+        <div class="bench-metric-detail">relevant Qs blocked</div>
+      </div>
+      <div class="bench-metric">
+        <div class="bench-metric-value">${pct(data.false_pass_rate)}</div>
+        <div class="bench-metric-label">False Pass</div>
+        <div class="bench-metric-detail">irrelevant Qs answered</div>
+      </div>
+      <div class="bench-metric">
+        <div class="bench-metric-value">${pct(data.tool_accuracy)}</div>
+        <div class="bench-metric-label">Tool Accuracy</div>
+        <div class="bench-metric-detail">correct tool selected</div>
+      </div>
+      <div class="bench-metric">
+        <div class="bench-metric-value">${pct(data.faithfulness_rate)}</div>
+        <div class="bench-metric-label">Faithfulness</div>
+        <div class="bench-metric-detail">grounded in tool output</div>
+      </div>
+      <div class="bench-metric">
+        <div class="bench-metric-value">${data.mean_latency_ms.toFixed(0)}ms</div>
+        <div class="bench-metric-label">Mean Latency</div>
+        <div class="bench-metric-detail">per test case</div>
+      </div>
+    </div>
+  `;
+
+  let rows = '';
+  for (const r of data.results) {
+    const cls = r.passed ? 'bench-row-pass' : 'bench-row-fail';
+    const badge = r.passed ? '<span class="bench-badge pass">PASS</span>' : '<span class="bench-badge fail">FAIL</span>';
+    const reason = r.failure_reason ? `<div class="bench-reason">${r.failure_reason}</div>` : '';
+    rows += `
+      <div class="bench-row ${cls}">
+        <div class="bench-row-header">
+          ${badge}
+          <span class="bench-case-id">${r.case_id}</span>
+          <span class="bench-latency">${r.latency_ms.toFixed(0)}ms</span>
+        </div>
+        <div class="bench-prompt">${r.prompt}</div>
+        ${reason}
+        <div class="bench-detail">
+          <span>Expected: ${r.expected_blocked ? 'blocked' : r.expected_tool || '—'}</span>
+          <span>Actual: ${r.actual_blocked ? 'blocked' : r.actual_tool || 'no tool'}</span>
+        </div>
+      </div>
+    `;
+  }
+  results.innerHTML = rows;
 }
 
 // --- Init ---
